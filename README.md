@@ -1,118 +1,289 @@
-# M3-B1 — Squelette repo (entretien client + identification sources)
+# M3-B1 — Acerox Métallurgie
 
-> **Repo template GitHub.** Clique sur **« Use this template »** en haut à
-> droite de cette page → **Create a new repository** → nomme-le
-> `M3-B1-<client>-<prénom>` sur **ton** compte GitHub personnel (le nom
-> du client te sera révélé mardi 9h).
+Analyse d’un nouveau besoin métier et identification de sources de données hétérogènes pour enrichir un modèle existant de prédiction des défauts qualité.
 
----
+## Objectif du projet
 
-## 🚀 Démarrage (4 commandes)
+Acerox Métallurgie dispose déjà d’un modèle qui analyse les données des lignes de production afin d’identifier les risques de non-conformité.
 
-```bash
-# 0. Clone ton repo perso fraîchement créé
-git clone git@github.com:<ton-user>/M3-B1-<client>-<prenom>.git
-cd M3-B1-<client>-<prenom>
+L’entreprise souhaite enrichir ce modèle avec trois nouvelles sources :
 
-# 1. Environnement virtuel
-python -m venv .venv && source .venv/bin/activate     # Linux/macOS
-# .venv\Scripts\activate                              # Windows
+* les mesures des capteurs IoT ;
+* les ordres de production issus de l’ERP ;
+* les événements contenus dans les logs machines.
 
-# 2. Dépendances
-pip install -r requirements.txt
+La mission consiste à comprendre le besoin réel du client, explorer les sources, identifier les problèmes de qualité et les risques RGPD, puis proposer une cartographie des flux de données.
 
-# 3. Vérification
-jupyter notebook notebooks/M3-B1_template.ipynb       # → s'ouvre dans le navigateur
+Ce brief porte sur l’analyse et la préparation. Il ne comprend pas le développement du pipeline d’ingestion ni la modification du modèle de machine learning.
+
+## Besoin métier reformulé
+
+La demande initiale de Sébastien Marchand était d’ajouter de nouvelles données au modèle existant.
+
+Le besoin métier identifié est plus précis :
+
+> Détecter plus tôt les dérives des lignes de production afin de limiter les pièces non conformes, éviter les arrêts brutaux et permettre aux équipes de maintenance d’intervenir de manière préventive.
+
+Acerox souhaite surtout éviter les défauts non détectés. Le rappel du modèle constitue donc un indicateur prioritaire, tout en maintenant un niveau raisonnable de précision afin de ne pas générer trop d’interventions inutiles.
+
+## Sources analysées
+
+### Capteurs IoT
+
+Fichier :
+
+```text
+data/capteurs_iot.csv
 ```
 
-Si ces 4 commandes marchent, ton poste est prêt.
+Caractéristiques principales :
 
-> ⚠️ Les 3 sources te seront fournies **mardi 9h après l'entretien
-> fictif** par la formatrice (Discord). Place-les dans `data/`. Le
-> `.gitignore` exclut `data/*.csv`, `data/*.json`, `data/*.log` du commit.
+* format CSV ;
+* 51 000 lignes ;
+* 7 colonnes ;
+* 3 sites ;
+* 8 capteurs ;
+* données couvrant environ un mois.
 
----
+Principales observations :
 
-## 📁 Structure du repo
+* 749 valeurs manquantes dans `vibration_mms`, soit 1,47 % ;
+* 1 000 doublons complets ;
+* 2 591 températures entre 150 et 160 °C concentrées sur Roubaix, ligne 3 ;
+* vibration constante à 12 mm/s sur ces valeurs extrêmes ;
+* fréquence annoncée d’une mesure par seconde non confirmée dans l’extrait ;
+* intervalle médian réel hors doublons : 266 secondes ;
+* intervalle moyen réel hors doublons : 401,41 secondes.
 
+### ERP
+
+Fichier :
+
+```text
+data/erp_export.json
 ```
-M3-B1-<client>-<prenom>/
-├── data/                                # gitignored (sauf jeu jouet provenance)
-│   ├── capteurs_iot.csv                 # fourni mardi 9h
-│   ├── erp_export.json                  # fourni mardi 9h
-│   ├── logs_machines.log                # fourni mardi 9h
-│   ├── capteurs_site_A.csv              # versionné — jeu jouet fusion/provenance
-│   └── capteurs_site_B.csv              # versionné — 2e export comparable
+
+Caractéristiques principales :
+
+* format JSON ;
+* 2 000 ordres de production ;
+* 9 champs ;
+* export quotidien.
+
+Principales observations :
+
+* 109 valeurs manquantes dans `ouvrier_id`, soit 5,45 % ;
+* aucun doublon sur `ordre_id` ;
+* 10 références produits ;
+* 4 statuts de production ;
+* présence de données personnelles indirectement identifiantes ;
+* absence du site de Lyon alors qu’il apparaît dans les autres sources.
+
+### Logs machines
+
+Fichier :
+
+```text
+data/logs_machines.log
+```
+
+Caractéristiques principales :
+
+* texte brut semi-structuré ;
+* 30 000 événements ;
+* environ 1,8 Mo ;
+* fréquence événementielle.
+
+Principales observations :
+
+* 22 501 événements `INFO` ;
+* 5 758 événements `WARN` ;
+* 1 741 événements `ERROR` ;
+* 4 615 événements `operator_login` ;
+* aucune ligne malformée détectée avec la structure analysée.
+
+## Fusion multi-sources et provenance
+
+Deux exports supplémentaires ont été étudiés :
+
+```text
+data/capteurs_site_A.csv
+data/capteurs_site_B.csv
+```
+
+La fusion naïve des deux fichiers a révélé trois problèmes :
+
+1. les identifiants `M04` et `M05` existent dans les deux sites ;
+2. les températures du site B sont exprimées en Fahrenheit malgré le nom de colonne `temp_c` ;
+3. `debit_l_min` est absent du site B, tandis que `firmware` est absent du site A.
+
+Les corrections réalisées sont les suivantes :
+
+* ajout d’une colonne `source` avant la fusion ;
+* création d’une clé composite comme `site_A::M04` ;
+* conversion des températures du site B en Celsius ;
+* conservation de la valeur et de l’unité originales ;
+* conservation explicite des valeurs manquantes ;
+* aucune valeur de débit inventée.
+
+Le tableau final contient 47 lignes et conserve la provenance de chaque enregistrement.
+
+## Risques RGPD identifiés
+
+Le principal risque ne vient pas d’une colonne isolée, mais du croisement des sources.
+
+La combinaison suivante peut permettre de reconstruire l’activité d’un salarié :
+
+```text
+ouvrier_id
++ operator_login
++ site
++ ligne de production
++ timestamp
+```
+
+Recommandations :
+
+* vérifier si l’identifiant individuel est réellement nécessaire ;
+* supprimer ou pseudonymiser `ouvrier_id` avant ingestion lorsque possible ;
+* limiter les droits d’accès ;
+* définir une durée de conservation ;
+* documenter la finalité du traitement ;
+* valider le traitement avec le DPO Acerox.
+
+## Livrables
+
+| Fichier                                   | Description                                              |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `notes_entretien.md`                      | Notes structurées de l’entretien avec Sébastien Marchand |
+| `notebooks/M3-B1_template.ipynb`          | Exploration des trois sources principales                |
+| `notebooks/M3-B1_fusion_provenance.ipynb` | Fusion des exports avec conservation de la provenance    |
+| `identification_sources.md`               | Note principale d’identification et recommandations      |
+| `flux_donnees.md`                         | Schéma Mermaid des flux de données                       |
+| `README.md`                               | Présentation et guide de reproduction                    |
+
+## Structure du repo
+
+```text
+M3-B1-acerox-fernando/
+├── data/
+│   ├── capteurs_iot.csv
+│   ├── erp_export.json
+│   ├── logs_machines.log
+│   ├── capteurs_site_A.csv
+│   └── capteurs_site_B.csv
 ├── notebooks/
-│   ├── M3-B1_template.ipynb             # exploration rapide 3 sources
-│   └── M3-B1_fusion_provenance.ipynb    # fusion 2 exports + colonne source
-├── ressources/                          # 📚 mini-cours d'appui
-│   ├── README.md
-│   ├── 01_Entretien_client_essentiel.md
-│   ├── 02_Cartographie_sources_essentiel.md
-│   ├── 03_Risques_RGPD_multisources_essentiel.md
-│   ├── 04_Schema_Mermaid_flux_essentiel.md
-│   ├── 05_Note_identification_essentiel.md
-│   └── liens_officiels.md
-├── identification_sources.md            # livrable principal (2-3 pages)
-├── flux_donnees.md                      # schéma Mermaid + légende
-├── notes_entretien.md                   # tes notes prises à 9h30
+│   ├── M3-B1_template.ipynb
+│   └── M3-B1_fusion_provenance.ipynb
+├── ressources/
+├── identification_sources.md
+├── flux_donnees.md
+├── notes_entretien.md
 ├── requirements.txt
 ├── .gitignore
-└── README.md (ce fichier — à compléter)
+└── README.md
 ```
 
+Les fichiers principaux de données sont exclus de Git par le `.gitignore`.
+
+## Installation
+
+### 1. Cloner le projet
+
+```bash
+git clone https://github.com/Nandodev-id/M3-B1-acerox-fernando.git
+cd M3-B1-acerox-fernando
+```
+
+### 2. Créer l’environnement virtuel
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Sous Windows :
+
+```bash
+.venv\Scripts\activate
+```
+
+### 3. Installer les dépendances
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+## Exécution des notebooks
+
+Lancer Jupyter :
+
+```bash
+jupyter notebook
+```
+
+Ouvrir ensuite :
+
+```text
+notebooks/M3-B1_template.ipynb
+```
+
+puis :
+
+```text
+notebooks/M3-B1_fusion_provenance.ipynb
+```
+
+Pour vérifier un notebook :
+
+```text
+Kernel → Restart Kernel and Run All Cells
+```
+
+Les deux notebooks doivent s’exécuter entièrement sans erreur.
+
+## Principales recommandations
+
+* intégrer les données IoT en priorité, après clarification de leur fréquence réelle et des valeurs extrêmes ;
+* intégrer l’ERP pour apporter le contexte de fabrication ;
+* intégrer les logs dans un second temps, après documentation de leurs événements ;
+* conserver systématiquement la provenance, la version, la fraîcheur et l’unité d’origine ;
+* utiliser une clé composite pour les machines des différents sites ;
+* ne pas inventer les données absentes ;
+* valider les traitements de données personnelles avec le DPO.
+
+## Questions encore ouvertes
+
+* Le fichier IoT est-il complet ou échantillonné ?
+* Les températures extrêmes sur Roubaix, ligne 3, correspondent-elles à une situation réelle ou à une saturation du capteur ?
+* Quelle clé relie les mesures IoT, les ordres ERP, les logs et les résultats qualité ?
+* Pourquoi Lyon apparaît-il dans les capteurs et les logs mais pas dans l’ERP ?
+* Le site B mesure-t-il le débit ?
+* Quelles sont les performances actuelles du modèle ?
+* L’objectif métier est-il une réduction de 20 % des non-conformités ou un taux final de 20 % ?
+* L’identité de l’ouvrier est-elle nécessaire pour la prédiction ?
+
+## Limites
+
+* aucune modification du modèle existant ;
+* aucun pipeline de production développé ;
+* aucune migration de base de données ;
+* aucune analyse statistique complète ;
+* aucune analyse juridique RGPD formelle ;
+* aucune validation métier des événements machines ;
+* aucune confirmation de la fréquence réelle du flux IoT complet.
+
+## Restitution
+
+Les points principaux à présenter en trois minutes sont :
+
+* la fréquence IoT annoncée ne correspond pas à la fréquence observée ;
+* les températures extrêmes sont concentrées sur une seule ligne et un seul capteur ;
+* la fusion de deux exports comparables révèle des différences de clés, d’unités et de schéma ;
+* le croisement ERP, logs et horaires peut permettre de réidentifier un salarié ;
+* la provenance doit être conservée à chaque étape du flux.
+
 ---
 
-## 📚 Mini-cours d'appui
-
-Les **5 mini-cours pédagogiques** sont fournis dans
-[`./ressources/`](./ressources/). Lecture juste-à-temps, ~15-20 min chacun :
-
-| Tâche | Mini-cours |
-|---|---|
-| Préparer l'entretien client | [`01_Entretien_client_essentiel.md`](./ressources/01_Entretien_client_essentiel.md) |
-| Cartographier les sources | [`02_Cartographie_sources_essentiel.md`](./ressources/02_Cartographie_sources_essentiel.md) |
-| Risques RGPD multi-sources | [`03_Risques_RGPD_multisources_essentiel.md`](./ressources/03_Risques_RGPD_multisources_essentiel.md) |
-| Schématiser les flux (Mermaid) | [`04_Schema_Mermaid_flux_essentiel.md`](./ressources/04_Schema_Mermaid_flux_essentiel.md) |
-| Rédiger la note d'identification | [`05_Note_identification_essentiel.md`](./ressources/05_Note_identification_essentiel.md) |
-
-Cf. [`./ressources/README.md`](./ressources/README.md) pour l'ordre détaillé.
-
----
-
-## 🧭 Démarche attendue
-
-1. **Préparation entretien** (30 min, 9h00-9h30) — 8-12 questions catégorisées
-2. **Entretien fictif** (30 min, 9h30-10h00) — visio Discord, notes au fil de l'eau
-3. **Analyse des 3 sources** (2 h, 10h00-12h30) — `pd.read_*` + `info` + `describe`
-3 bis. **Fusion + provenance** (~30 min) — ouvre
-   [`notebooks/M3-B1_fusion_provenance.ipynb`](./notebooks/M3-B1_fusion_provenance.ipynb) :
-   réunis **deux exports comparables** (`capteurs_site_A/B.csv`, déjà dans
-   `data/`) avec une colonne `source`, et débusque les 3 pièges (ids qui se
-   chevauchent, unité de température oubliée, colonne absente). C'est le geste
-   **exact** que le cas d'usage certif attend côté données — reporte une phrase
-   dans `identification_sources.md`.
-4. **Schéma Mermaid** (1 h, 13h30-14h30) — `flux_donnees.md`
-5. **Note d'identification** (1 h 30, 14h30-16h00) — `identification_sources.md`
-6. **Restitution** (30 min, 16h00-16h30) — 3 min/apprenant en plénière
-
-→ Compétences visées : **C1 — imiter** + **C2 — adapter**.
-
----
-
-## ✅ Conventions de code
-
-- Python 3.11+
-- Pas de transformation de données dans le notebook (juste exploration)
-- Markdown structuré dans tous les `.md`
-- Mermaid intégré dans `flux_donnees.md`
-
----
-
-## 🆘 Bloqué·e ?
-
-1. Relis le mini-cours correspondant à ta tâche (cf. [`./ressources/README.md`](./ressources/README.md))
-2. Si tu n'arrives pas à parser les logs : pas grave, décris-les en
-   pseudo-code dans la note. **Pas de code lourd ici** — c'est M3-B2 demain.
-3. Demande sur Discord (`fil-M3-B1`).
+Projet réalisé par **Fernando** dans le cadre du brief **M3-B1 — Acerox Métallurgie**, le 21 juillet 2026.
